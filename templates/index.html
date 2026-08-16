@@ -3,32 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FinMind Key Price Research V3.1</title>
+<title>FinMind Key Price Research V3.3</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;background:#f4f6f8;margin:0;color:#17202a}
 .wrap{max-width:720px;margin:auto;padding:28px 16px}
-.card{background:white;padding:22px;border-radius:18px;border:1px solid #e5e7eb}
-h1{margin:0 0 8px}.sub{color:#64748b;margin-bottom:20px;line-height:1.6}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.full{grid-column:1/-1}
+.card{background:#fff;padding:22px;border-radius:18px;border:1px solid #e5e7eb}
+h1{margin:0 0 8px}
+.sub{color:#64748b;margin-bottom:20px;line-height:1.6}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.full{grid-column:1/-1}
 label{display:block;font-weight:700;font-size:13px;margin-bottom:6px}
 input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #d1d5db;border-radius:10px;font-size:16px}
 button,a.dl{width:100%;box-sizing:border-box;padding:14px;border-radius:11px;font-size:16px;font-weight:800;border:0;text-align:center;text-decoration:none;display:block}
-#startBtn{background:#2563eb;color:white}
-#stopBtn{display:none;margin-top:9px;background:white;color:#b91c1c;border:1px solid #fecaca}
+#startBtn{background:#2563eb;color:#fff}
+#stopBtn{display:none;margin-top:9px;background:#fff;color:#b91c1c;border:1px solid #fecaca}
 .status{display:none;margin-top:18px}
 .bar{height:12px;background:#e5e7eb;border-radius:99px;overflow:hidden}
 .fill{height:100%;background:#18794e;width:0}
 .row{display:flex;justify-content:space-between;margin-bottom:8px;gap:10px}
 .note{margin-top:16px;background:#f8fafc;padding:13px;border-radius:12px;color:#475569;line-height:1.6;font-size:14px}
-a.dl{background:#18794e;color:white;margin-top:12px}
+a.dl{background:#18794e;color:#fff;margin-top:12px}
 .err{color:#b91c1c}
 @media(max-width:550px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
 </style>
 </head>
 <body>
 <div class="wrap">
-<h1>FinMind Key Price Research V3.1</h1>
-<div class="sub">先用「漲幅＋成交量」砍掉雜訊，再抓候選股當日 1 分 K。</div>
+<h1>FinMind Key Price Research V3.3</h1>
+<div class="sub">4%＋4,000張先篩，只有合格股票才抓當日 1 分 K。</div>
 
 <div class="card">
 <div class="grid">
@@ -48,6 +50,7 @@ a.dl{background:#18794e;color:white;margin-top:12px}
 <label>最低當日總成交量（張）</label>
 <input id="minLots" type="number" step="500" value="4000">
 </div>
+
 <div class="full">
 <button id="startBtn" onclick="startJob()">開始抓資料</button>
 <button id="stopBtn" onclick="cancelJob()">停止抓資料</button>
@@ -55,25 +58,28 @@ a.dl{background:#18794e;color:white;margin-top:12px}
 </div>
 
 <div class="note">
-<b>預設候選：</b>當日最高漲幅 ≥ 4% 且當日總成交量 ≥ 4,000 張。
-只有通過者才抓 1 分 K。關閉頁面或失聯約 20 秒後，後端自動停止。
+<b>V3.3：</b>完全移除 heartbeat、20秒、90秒失聯判斷。<br>
+按「停止抓資料」會停止；關閉/離開網頁時會主動送出取消指令。<br>
+API 請求間隔預設 0.2 秒。
 </div>
 
 <div id="statusBox" class="status">
 <div class="row">
-<span id="message">準備中</span>
+<span id="message">準備中…</span>
 <b id="percent">0%</b>
 </div>
-<div class="bar"><div id="progressFill" class="fill"></div></div>
+<div class="bar">
+<div id="progressFill" class="fill"></div>
+</div>
 <div id="result"></div>
 </div>
+
 </div>
 </div>
 
 <script>
 let jobId = null;
 let pollTimer = null;
-let heartbeatTimer = null;
 
 function el(id){
   return document.getElementById(id);
@@ -87,58 +93,40 @@ async function startJob(){
   el("percent").textContent = "0%";
   el("progressFill").style.width = "0%";
 
-  const payload = {
-    start: el("startDate").value,
-    end: el("endDate").value,
-    screen_pct: Number(el("screenPct").value),
-    min_lots: Number(el("minLots").value)
-  };
-
   try{
-    const r = await fetch("/start", {
+    const response = await fetch("/start", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(payload)
+      body:JSON.stringify({
+        start:el("startDate").value,
+        end:el("endDate").value,
+        screen_pct:Number(el("screenPct").value),
+        min_lots:Number(el("minLots").value)
+      })
     });
 
-    const text = await r.text();
+    const text = await response.text();
+
     let data;
     try{
       data = JSON.parse(text);
     }catch{
-      throw new Error("伺服器回傳格式錯誤，請查看 Render Logs");
+      throw new Error("伺服器回傳格式錯誤");
     }
 
-    if(!r.ok){
+    if(!response.ok){
       throw new Error(data.error || "啟動失敗");
     }
 
     jobId = data.job_id;
     el("stopBtn").style.display = "block";
-    startHeartbeat();
+
     pollStatus();
 
-  }catch(e){
-    el("message").innerHTML = '<span class="err">' + e.message + '</span>';
+  }catch(error){
+    el("message").innerHTML =
+      '<span class="err">' + error.message + '</span>';
     el("startBtn").disabled = false;
-  }
-}
-
-function startHeartbeat(){
-  stopHeartbeat();
-
-  heartbeatTimer = setInterval(async ()=>{
-    if(!jobId) return;
-    try{
-      await fetch("/heartbeat/" + jobId, {method:"POST"});
-    }catch(e){}
-  }, 5000);
-}
-
-function stopHeartbeat(){
-  if(heartbeatTimer){
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
   }
 }
 
@@ -146,8 +134,8 @@ async function pollStatus(){
   if(!jobId) return;
 
   try{
-    const r = await fetch("/status/" + jobId);
-    const text = await r.text();
+    const response = await fetch("/status/" + jobId);
+    const text = await response.text();
 
     let data;
     try{
@@ -156,23 +144,29 @@ async function pollStatus(){
       throw new Error("狀態回傳格式錯誤");
     }
 
-    const p = Math.round(Number(data.progress || 0));
+    const progress = Math.round(Number(data.progress || 0));
 
-    el("percent").textContent = p + "%";
-    el("progressFill").style.width = p + "%";
+    el("percent").textContent = progress + "%";
+    el("progressFill").style.width = progress + "%";
     el("message").textContent = data.message || "";
 
     if(data.status === "done"){
       finishJob();
+
       el("result").innerHTML =
         '<a class="dl" href="' + data.download + '">下載研究資料 ZIP</a>';
+
       return;
     }
 
     if(data.status === "error"){
       finishJob();
+
       el("message").innerHTML =
-        '<span class="err">' + (data.message || "發生錯誤") + '</span>';
+        '<span class="err">' +
+        (data.message || "發生錯誤") +
+        '</span>';
+
       return;
     }
 
@@ -182,9 +176,11 @@ async function pollStatus(){
       return;
     }
 
-  }catch(e){
+  }catch(error){
     el("message").innerHTML =
-      '<span class="err">連線暫時中斷：' + e.message + '</span>';
+      '<span class="err">連線暫時中斷：' +
+      error.message +
+      '</span>';
   }
 
   pollTimer = setTimeout(pollStatus, 1800);
@@ -197,15 +193,13 @@ async function cancelJob(){
   el("message").textContent = "正在停止…";
 
   try{
-    await fetch("/cancel/" + jobId, {method:"POST"});
-  }catch(e){}
-
-  stopHeartbeat();
+    await fetch("/cancel/" + jobId, {
+      method:"POST"
+    });
+  }catch(error){}
 }
 
 function finishJob(){
-  stopHeartbeat();
-
   if(pollTimer){
     clearTimeout(pollTimer);
     pollTimer = null;
@@ -224,9 +218,8 @@ window.addEventListener("pagehide", ()=>{
         "/cancel/" + jobId,
         new Blob([], {type:"text/plain"})
       );
-    }catch(e){}
+    }catch(error){}
   }
-  stopHeartbeat();
 });
 </script>
 </body>
