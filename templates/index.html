@@ -1,270 +1,48 @@
-<!doctype html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>FinMind Key Price Research V2</title>
-  <style>
-    :root{
-      --bg:#f4f6f8; --card:#fff; --text:#17202a; --muted:#6b7280;
-      --green:#18794e; --line:#e5e7eb; --blue:#2563eb; --danger:#b91c1c;
-      --warn:#92400e;
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0;background:var(--bg);color:var(--text);
-      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;
-    }
-    .wrap{max-width:760px;margin:0 auto;padding:28px 16px 60px}
-    h1{font-size:28px;margin:0 0 6px}
-    .sub{color:var(--muted);line-height:1.6;margin-bottom:18px}
-    .card{
-      background:var(--card);border:1px solid var(--line);border-radius:18px;
-      padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.04)
-    }
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-    label{display:block;font-size:13px;font-weight:700;margin-bottom:6px}
-    input{
-      width:100%;font-size:16px;padding:12px;border-radius:10px;
-      border:1px solid #d1d5db;background:#fff
-    }
-    .full{grid-column:1/-1}
-    button,.download{
-      width:100%;border:0;border-radius:12px;padding:14px 16px;
-      font-size:16px;font-weight:800;cursor:pointer;text-align:center;
-      text-decoration:none;display:inline-block
-    }
-    #startBtn{background:var(--blue);color:#fff}
-    #cancelBtn{background:#fff;color:var(--danger);border:1px solid #fecaca;margin-top:10px;display:none}
-    button:disabled{opacity:.55;cursor:not-allowed}
-    .download{background:var(--green);color:#fff;margin-top:12px}
-    .note{
-      margin-top:14px;padding:12px;border-radius:12px;background:#f8fafc;
-      color:#475569;font-size:14px;line-height:1.6
-    }
-    .note strong{color:#0f172a}
-    .status{margin-top:18px;display:none}
-    .bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden}
-    .fill{height:100%;width:0;background:var(--green);transition:width .3s}
-    .statusline{display:flex;justify-content:space-between;gap:10px;margin:9px 0}
-    .msg{font-size:14px;color:#475569;word-break:break-word}
-    .pct{font-weight:800}
-    .error{color:var(--danger)}
-    .warn{color:var(--warn)}
-    .foot{margin-top:20px;color:#94a3b8;font-size:12px;line-height:1.6}
-    @media(max-width:560px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
-  </style>
-</head>
-<body>
-<div class="wrap">
-  <h1>FinMind Key Price Research V2</h1>
-  <div class="sub">
-    只抓你指定日期。先找當日強勢股，再抓該日 1 分 K。
-    不抓 RVOL、不往前抓 5 / 20 日分鐘資料。
-  </div>
-
-  <div class="card">
-    <div class="grid">
-      <div>
-        <label>開始日期</label>
-        <input id="start" type="date" value="2026-08-14">
-      </div>
-      <div>
-        <label>結束日期</label>
-        <input id="end" type="date" value="2026-08-14">
-      </div>
-      <div class="full">
-        <label>日內最高漲幅預篩 (%)</label>
-        <input id="screen" type="number" min="0" max="10" step="0.5" value="3">
-      </div>
-      <div class="full">
-        <button id="startBtn" onclick="startJob()">開始抓資料</button>
-        <button id="cancelBtn" onclick="cancelJob()">停止抓資料</button>
-      </div>
-    </div>
-
-    <div class="note">
-      <strong>第一性原理版本：</strong>
-      當日強勢 → Key Price → Test 次數 → 測試量壓縮 → 竭盡 → Key1。<br>
-      關閉網頁、斷線或電腦睡眠後，如果伺服器超過約 20 秒收不到心跳，
-      會自動停止工作，避免繼續消耗 API。
-    </div>
-
-    <div id="status" class="status">
-      <div class="statusline">
-        <div id="msg" class="msg">準備中…</div>
-        <div id="pct" class="pct">0%</div>
-      </div>
-      <div class="bar"><div id="fill" class="fill"></div></div>
-      <div id="result"></div>
-    </div>
-  </div>
-
-  <div class="foot">
-    同一時間只允許一個工作，避免重複按鈕造成 API 重複消耗。
-    Render 免費服務若重新部署，暫存中的工作與 ZIP 仍可能消失。
-  </div>
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FinMind Key Price Research V3</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;background:#f4f6f8;margin:0;color:#17202a}
+.wrap{max-width:720px;margin:auto;padding:28px 16px}.card{background:white;padding:22px;border-radius:18px;border:1px solid #e5e7eb}
+h1{margin:0 0 8px}.sub{color:#64748b;margin-bottom:20px;line-height:1.6}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.full{grid-column:1/-1}
+label{display:block;font-weight:700;font-size:13px;margin-bottom:6px}input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #d1d5db;border-radius:10px;font-size:16px}
+button,a.dl{width:100%;box-sizing:border-box;padding:14px;border-radius:11px;font-size:16px;font-weight:800;border:0;text-align:center;text-decoration:none;display:block}
+#start{background:#2563eb;color:white}#stop{display:none;margin-top:9px;background:white;color:#b91c1c;border:1px solid #fecaca}
+.status{display:none;margin-top:18px}.bar{height:12px;background:#e5e7eb;border-radius:99px;overflow:hidden}.fill{height:100%;background:#18794e;width:0}
+.row{display:flex;justify-content:space-between;margin-bottom:8px;gap:10px}.note{margin-top:16px;background:#f8fafc;padding:13px;border-radius:12px;color:#475569;line-height:1.6;font-size:14px}
+a.dl{background:#18794e;color:white;margin-top:12px}@media(max-width:550px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+</style></head><body><div class="wrap"><h1>FinMind Key Price Research V3</h1>
+<div class="sub">先用「漲幅＋成交量」砍掉雜訊，再抓候選股當日 1 分 K。</div>
+<div class="card"><div class="grid">
+<div><label>開始日期</label><input id="sd" type="date" value="2026-08-14"></div>
+<div><label>結束日期</label><input id="ed" type="date" value="2026-08-14"></div>
+<div><label>最低日內最高漲幅 (%)</label><input id="pctin" type="number" step=".5" value="4"></div>
+<div><label>最低當日總成交量（張）</label><input id="lots" type="number" step="500" value="4000"></div>
+<div class="full"><button id="start" onclick="go()">開始抓資料</button><button id="stop" onclick="cancel()">停止抓資料</button></div>
 </div>
-
+<div class="note"><b>預設候選：</b>當日最高漲幅 ≥ 4% 且當日總成交量 ≥ 4,000 張。只有通過者才抓 1 分 K。關閉頁面或失聯約 20 秒後，後端自動停止。</div>
+<div id="status" class="status"><div class="row"><span id="msg">準備中</span><b id="pc">0%</b></div><div class="bar"><div id="fill" class="fill"></div></div><div id="result"></div></div>
+</div></div>
 <script>
-let jobId = null;
-let pollTimer = null;
-let heartbeatTimer = null;
-
-async function startJob(){
-  const btn = document.getElementById("startBtn");
-  const cancelBtn = document.getElementById("cancelBtn");
-  const status = document.getElementById("status");
-  const result = document.getElementById("result");
-
-  btn.disabled = true;
-  result.innerHTML = "";
-  status.style.display = "block";
-
-  const payload = {
-    start: document.getElementById("start").value,
-    end: document.getElementById("end").value,
-    screen_pct: Number(document.getElementById("screen").value),
-  };
-
-  try{
-    const r = await fetch("/start", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(payload)
-    });
-
-    const text = await r.text();
-    let data;
-    try{
-      data = JSON.parse(text);
-    }catch{
-      throw new Error("伺服器回傳非 JSON，請看 Render Logs");
-    }
-
-    if(!r.ok) throw new Error(data.error || "無法建立工作");
-
-    jobId = data.job_id;
-    cancelBtn.style.display = "block";
-
-    startHeartbeat();
-    poll();
-
-  }catch(e){
-    setError(e.message);
-    btn.disabled = false;
-  }
+let jid=null,pt=null,ht=null;
+async function go(){
+ document.getElementById("start").disabled=true; document.getElementById("status").style.display="block";document.getElementById("result").innerHTML="";
+ try{
+  let r=await fetch("/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({start:sd.value,end:ed.value,screen_pct:+pctin.value,min_lots:+lots.value})});
+  let d=await r.json(); if(!r.ok)throw Error(d.error||"啟動失敗"); jid=d.job_id;stop.style.display="block";
+  ht=setInterval(()=>fetch("/heartbeat/"+jid,{method:"POST"}).catch(()=>{}),5000); poll();
+ }catch(e){msg.textContent=e.message;document.getElementById("start").disabled=false}
 }
-
-function startHeartbeat(){
-  stopHeartbeat();
-
-  heartbeatTimer = setInterval(async ()=>{
-    if(!jobId) return;
-    try{
-      await fetch(`/heartbeat/${jobId}`, {method:"POST"});
-    }catch(e){
-      // 不立即報錯；後端會用 timeout 自動取消
-    }
-  }, 5000);
-}
-
-function stopHeartbeat(){
-  if(heartbeatTimer){
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}
-
 async function poll(){
-  if(!jobId) return;
-
-  clearTimeout(pollTimer);
-
-  try{
-    const r = await fetch(`/status/${jobId}`);
-    const text = await r.text();
-
-    let data;
-    try{
-      data = JSON.parse(text);
-    }catch{
-      throw new Error("狀態回傳中斷，請查看 Render Logs");
-    }
-
-    if(!r.ok) throw new Error(data.error || "狀態查詢失敗");
-
-    const p = Math.round(Number(data.progress || 0));
-    document.getElementById("pct").textContent = `${p}%`;
-    document.getElementById("fill").style.width = `${p}%`;
-    document.getElementById("msg").textContent = data.message || "";
-
-    if(data.status === "done"){
-      finishJob();
-      document.getElementById("result").innerHTML =
-        `<a class="download" href="${data.download}">下載 Key Price 研究資料 ZIP</a>`;
-      return;
-    }
-
-    if(data.status === "cancelled"){
-      finishJob();
-      document.getElementById("msg").innerHTML =
-        `<span class="warn">${data.message || "工作已停止"}</span>`;
-      return;
-    }
-
-    if(data.status === "error"){
-      finishJob();
-      setError(data.message || "發生錯誤");
-      return;
-    }
-
-    pollTimer = setTimeout(poll, 1800);
-
-  }catch(e){
-    setError(e.message);
-    // 不立即 finish，heartbeat 若還在代表 tab 還開著，可再看 log
-    pollTimer = setTimeout(poll, 3000);
-  }
+ try{
+  let r=await fetch("/status/"+jid),d=await r.json(),p=Math.round(d.progress||0);pc.textContent=p+"%";fill.style.width=p+"%";msg.textContent=d.message||"";
+  if(d.status==="done"){finish();result.innerHTML='<a class="dl" href="'+d.download+'">下載研究資料 ZIP</a>';return}
+  if(d.status==="error"||d.status==="cancelled"){finish();return}
+ }catch(e){msg.textContent="連線暫時中斷："+e.message}
+ pt=setTimeout(poll,1800);
 }
-
-async function cancelJob(){
-  if(!jobId) return;
-
-  document.getElementById("cancelBtn").disabled = true;
-  document.getElementById("msg").textContent = "正在停止…";
-
-  try{
-    await fetch(`/cancel/${jobId}`, {method:"POST"});
-  }catch(e){}
-
-  stopHeartbeat();
-}
-
-function finishJob(){
-  stopHeartbeat();
-  clearTimeout(pollTimer);
-
-  document.getElementById("startBtn").disabled = false;
-  document.getElementById("cancelBtn").style.display = "none";
-  document.getElementById("cancelBtn").disabled = false;
-}
-
-function setError(text){
-  document.getElementById("msg").innerHTML =
-    `<span class="error">${String(text)}</span>`;
-}
-
-// 關閉/重新整理網頁時，嘗試立即通知後端停止。
-// 即使 sendBeacon 失敗，後端仍會因心跳逾時自動停止。
-window.addEventListener("pagehide", ()=>{
-  if(jobId){
-    try{
-      navigator.sendBeacon(`/cancel/${jobId}`, new Blob([], {type:"text/plain"}));
-    }catch(e){}
-  }
-  stopHeartbeat();
-});
-</script>
-</body>
-</html>
+async function cancel(){if(jid)fetch("/cancel/"+jid,{method:"POST"}).catch(()=>{});clearInterval(ht)}
+function finish(){clearInterval(ht);clearTimeout(pt);document.getElementById("start").disabled=false;stop.style.display="none"}
+addEventListener("pagehide",()=>{if(jid)navigator.sendBeacon("/cancel/"+jid,new Blob([]));clearInterval(ht)});
+</script></body></html>
