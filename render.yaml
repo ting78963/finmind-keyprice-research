@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: finmind-keyprice-research
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 8 --timeout 0 app:app
+    envVars:
+      - key: FINMIND_TOKEN
+        sync: false
+      - key: FINMIND_API_SLEEP
+        value: "0.65"
