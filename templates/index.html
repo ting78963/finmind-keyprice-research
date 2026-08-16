@@ -3,44 +3,46 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>FinMind Key Price Research</title>
+  <title>FinMind Key Price Research V2</title>
   <style>
     :root{
       --bg:#f4f6f8; --card:#fff; --text:#17202a; --muted:#6b7280;
       --green:#18794e; --line:#e5e7eb; --blue:#2563eb; --danger:#b91c1c;
+      --warn:#92400e;
     }
     *{box-sizing:border-box}
     body{
-      margin:0; background:var(--bg); color:var(--text);
+      margin:0;background:var(--bg);color:var(--text);
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;
     }
     .wrap{max-width:760px;margin:0 auto;padding:28px 16px 60px}
-    .hero{margin-bottom:18px}
     h1{font-size:28px;margin:0 0 6px}
-    .sub{color:var(--muted);line-height:1.6}
+    .sub{color:var(--muted);line-height:1.6;margin-bottom:18px}
     .card{
       background:var(--card);border:1px solid var(--line);border-radius:18px;
-      padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.04);
+      padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.04)
     }
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
     label{display:block;font-size:13px;font-weight:700;margin-bottom:6px}
     input{
       width:100%;font-size:16px;padding:12px;border-radius:10px;
-      border:1px solid #d1d5db;background:#fff;
+      border:1px solid #d1d5db;background:#fff
     }
     .full{grid-column:1/-1}
     button,.download{
-      display:inline-block;width:100%;border:0;border-radius:12px;
-      padding:14px 16px;font-size:16px;font-weight:800;cursor:pointer;
-      text-align:center;text-decoration:none;
+      width:100%;border:0;border-radius:12px;padding:14px 16px;
+      font-size:16px;font-weight:800;cursor:pointer;text-align:center;
+      text-decoration:none;display:inline-block
     }
-    button{background:var(--blue);color:white}
+    #startBtn{background:var(--blue);color:#fff}
+    #cancelBtn{background:#fff;color:var(--danger);border:1px solid #fecaca;margin-top:10px;display:none}
     button:disabled{opacity:.55;cursor:not-allowed}
-    .download{background:var(--green);color:white;margin-top:12px}
+    .download{background:var(--green);color:#fff;margin-top:12px}
     .note{
       margin-top:14px;padding:12px;border-radius:12px;background:#f8fafc;
       color:#475569;font-size:14px;line-height:1.6
     }
+    .note strong{color:#0f172a}
     .status{margin-top:18px;display:none}
     .bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden}
     .fill{height:100%;width:0;background:var(--green);transition:width .3s}
@@ -48,48 +50,44 @@
     .msg{font-size:14px;color:#475569;word-break:break-word}
     .pct{font-weight:800}
     .error{color:var(--danger)}
-    .foot{margin-top:20px;color:#94a3b8;font-size:12px;line-height:1.5}
+    .warn{color:var(--warn)}
+    .foot{margin-top:20px;color:#94a3b8;font-size:12px;line-height:1.6}
     @media(max-width:560px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="hero">
-    <h1>FinMind Key Price Research</h1>
-    <div class="sub">
-      先用日線挑出曾達門檻的股票，再抓必要的 1 分 K 與歷史開盤量，
-      產生後續 Key Price / Test 3–4 / 量能竭盡研究資料。
-    </div>
+  <h1>FinMind Key Price Research V2</h1>
+  <div class="sub">
+    只抓你指定日期。先找當日強勢股，再抓該日 1 分 K。
+    不抓 RVOL、不往前抓 5 / 20 日分鐘資料。
   </div>
 
   <div class="card">
     <div class="grid">
       <div>
         <label>開始日期</label>
-        <input id="start" type="date" value="2026-05-01">
+        <input id="start" type="date" value="2026-08-14">
       </div>
       <div>
         <label>結束日期</label>
         <input id="end" type="date" value="2026-08-14">
       </div>
-      <div>
+      <div class="full">
         <label>日內最高漲幅預篩 (%)</label>
         <input id="screen" type="number" min="0" max="10" step="0.5" value="3">
       </div>
-      <div>
-        <label>RVOL 歷史交易日</label>
-        <input id="warmup" type="number" min="5" max="60" step="1" value="20">
-      </div>
-
       <div class="full">
         <button id="startBtn" onclick="startJob()">開始抓資料</button>
+        <button id="cancelBtn" onclick="cancelJob()">停止抓資料</button>
       </div>
     </div>
 
     <div class="note">
-      建議第一輪保持 <b>3%</b> 預篩、<b>20 日</b> RVOL。
-      3% 只是下載階段保留樣本，後續再比較 3 / 3.5 / 4 / 4.5 / 5%。
-      FinMind Token 存在 Render 環境變數，不會送到瀏覽器。
+      <strong>第一性原理版本：</strong>
+      當日強勢 → Key Price → Test 次數 → 測試量壓縮 → 竭盡 → Key1。<br>
+      關閉網頁、斷線或電腦睡眠後，如果伺服器超過約 20 秒收不到心跳，
+      會自動停止工作，避免繼續消耗 API。
     </div>
 
     <div id="status" class="status">
@@ -103,16 +101,19 @@
   </div>
 
   <div class="foot">
-    Render 免費/一般 Web Service 的檔案系統可能在重新部署或重啟後清除。
-    因此工作完成後請直接下載 ZIP。大量日期範圍可能需要較長時間。
+    同一時間只允許一個工作，避免重複按鈕造成 API 重複消耗。
+    Render 免費服務若重新部署，暫存中的工作與 ZIP 仍可能消失。
   </div>
 </div>
 
 <script>
-let timer = null;
+let jobId = null;
+let pollTimer = null;
+let heartbeatTimer = null;
 
 async function startJob(){
   const btn = document.getElementById("startBtn");
+  const cancelBtn = document.getElementById("cancelBtn");
   const status = document.getElementById("status");
   const result = document.getElementById("result");
 
@@ -124,7 +125,6 @@ async function startJob(){
     start: document.getElementById("start").value,
     end: document.getElementById("end").value,
     screen_pct: Number(document.getElementById("screen").value),
-    warmup_days: Number(document.getElementById("warmup").value),
   };
 
   try{
@@ -133,20 +133,65 @@ async function startJob(){
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify(payload)
     });
-    const data = await r.json();
+
+    const text = await r.text();
+    let data;
+    try{
+      data = JSON.parse(text);
+    }catch{
+      throw new Error("伺服器回傳非 JSON，請看 Render Logs");
+    }
+
     if(!r.ok) throw new Error(data.error || "無法建立工作");
-    poll(data.job_id);
+
+    jobId = data.job_id;
+    cancelBtn.style.display = "block";
+
+    startHeartbeat();
+    poll();
+
   }catch(e){
     setError(e.message);
     btn.disabled = false;
   }
 }
 
-async function poll(jobId){
-  clearTimeout(timer);
+function startHeartbeat(){
+  stopHeartbeat();
+
+  heartbeatTimer = setInterval(async ()=>{
+    if(!jobId) return;
+    try{
+      await fetch(`/heartbeat/${jobId}`, {method:"POST"});
+    }catch(e){
+      // 不立即報錯；後端會用 timeout 自動取消
+    }
+  }, 5000);
+}
+
+function stopHeartbeat(){
+  if(heartbeatTimer){
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+async function poll(){
+  if(!jobId) return;
+
+  clearTimeout(pollTimer);
+
   try{
     const r = await fetch(`/status/${jobId}`);
-    const data = await r.json();
+    const text = await r.text();
+
+    let data;
+    try{
+      data = JSON.parse(text);
+    }catch{
+      throw new Error("狀態回傳中斷，請查看 Render Logs");
+    }
+
     if(!r.ok) throw new Error(data.error || "狀態查詢失敗");
 
     const p = Math.round(Number(data.progress || 0));
@@ -155,29 +200,71 @@ async function poll(jobId){
     document.getElementById("msg").textContent = data.message || "";
 
     if(data.status === "done"){
+      finishJob();
       document.getElementById("result").innerHTML =
-        `<a class="download" href="${data.download}">下載研究資料 ZIP</a>`;
-      document.getElementById("startBtn").disabled = false;
+        `<a class="download" href="${data.download}">下載 Key Price 研究資料 ZIP</a>`;
+      return;
+    }
+
+    if(data.status === "cancelled"){
+      finishJob();
+      document.getElementById("msg").innerHTML =
+        `<span class="warn">${data.message || "工作已停止"}</span>`;
       return;
     }
 
     if(data.status === "error"){
+      finishJob();
       setError(data.message || "發生錯誤");
-      document.getElementById("startBtn").disabled = false;
       return;
     }
 
-    timer = setTimeout(()=>poll(jobId), 1800);
+    pollTimer = setTimeout(poll, 1800);
+
   }catch(e){
     setError(e.message);
-    document.getElementById("startBtn").disabled = false;
+    // 不立即 finish，heartbeat 若還在代表 tab 還開著，可再看 log
+    pollTimer = setTimeout(poll, 3000);
   }
+}
+
+async function cancelJob(){
+  if(!jobId) return;
+
+  document.getElementById("cancelBtn").disabled = true;
+  document.getElementById("msg").textContent = "正在停止…";
+
+  try{
+    await fetch(`/cancel/${jobId}`, {method:"POST"});
+  }catch(e){}
+
+  stopHeartbeat();
+}
+
+function finishJob(){
+  stopHeartbeat();
+  clearTimeout(pollTimer);
+
+  document.getElementById("startBtn").disabled = false;
+  document.getElementById("cancelBtn").style.display = "none";
+  document.getElementById("cancelBtn").disabled = false;
 }
 
 function setError(text){
   document.getElementById("msg").innerHTML =
     `<span class="error">${String(text)}</span>`;
 }
+
+// 關閉/重新整理網頁時，嘗試立即通知後端停止。
+// 即使 sendBeacon 失敗，後端仍會因心跳逾時自動停止。
+window.addEventListener("pagehide", ()=>{
+  if(jobId){
+    try{
+      navigator.sendBeacon(`/cancel/${jobId}`, new Blob([], {type:"text/plain"}));
+    }catch(e){}
+  }
+  stopHeartbeat();
+});
 </script>
 </body>
 </html>
