@@ -16,41 +16,68 @@ from flask import Flask, jsonify, render_template, request, send_file
 app = Flask(__name__)
 
 API = "https://api.finmindtrade.com/api/v4/data"
-DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/tmp/finmind_web"))
+DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/tmp/finmind_keyprice_v2"))
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
-# FinMind Sponsor 6000 calls/hour ≈ 1.67 req/sec.
-# 0.65 秒/次稍微保守，避免撞限額。
 API_SLEEP = float(os.environ.get("FINMIND_API_SLEEP", "0.65"))
+HEARTBEAT_TIMEOUT = float(os.environ.get("JOB_HEARTBEAT_TIMEOUT", "20"))
 
 jobs = {}
 jobs_lock = threading.Lock()
 
 
+class JobCancelled(Exception):
+    pass
+
+
 class FinMindClient:
-    def __init__(self, token: str):
+    def __init__(self, token: str, job_id: str):
         if not token:
-            raise RuntimeError("Render 尚未設定 FINMIND_TOKEN 環境變數")
+            raise RuntimeError("Render 尚未設定 FINMIND_TOKEN")
         self.token = token
+        self.job_id = job_id
         self.session = requests.Session()
 
     def get(self, dataset: str, **params) -> pd.DataFrame:
+        check_cancel(self.job_id)
+
         q = {"dataset": dataset, "token": self.token, **params}
+
         for attempt in range(7):
+            check_cancel(self.job_id)
+
             r = self.session.get(API, params=q, timeout=90)
+
             if r.status_code == 429:
                 wait = min(120, 3 * (2 ** attempt))
-                time.sleep(wait)
+                for _ in range(int(wait * 2)):
+                    check_cancel(self.job_id)
+                    time.sleep(0.5)
                 continue
+
             r.raise_for_status()
             payload = r.json()
+
             if payload.get("status") != 200:
                 raise RuntimeError(
                     f"FinMind {dataset}: {payload.get('msg', payload)}"
                 )
-            time.sleep(API_SLEEP)
+
+            # 分段 sleep，讓取消可以快速生效
+            slept = 0.0
+            while slept < API_SLEEP:
+                check_cancel(self.job_id)
+                step = min(0.25, API_SLEEP - slept)
+                time.sleep(step)
+                slept += step
+
             return pd.DataFrame(payload.get("data", []))
+
         raise RuntimeError("FinMind API 持續回傳 429，請稍後再試")
+
+
+def now_ts():
+    return time.time()
 
 
 def update_job(job_id, **kwargs):
@@ -63,10 +90,27 @@ def get_job(job_id):
         return dict(jobs.get(job_id, {}))
 
 
-def pct(x, total):
-    if total <= 0:
-        return 0
-    return int(min(100, max(0, x / total * 100)))
+def any_active_job():
+    with jobs_lock:
+        for jid, j in jobs.items():
+            if j.get("status") in {"queued", "running"}:
+                return jid
+    return None
+
+
+def check_cancel(job_id):
+    job = get_job(job_id)
+    if not job:
+        raise JobCancelled("工作不存在")
+
+    if job.get("cancel_requested"):
+        raise JobCancelled("使用者已停止工作")
+
+    # 網頁若關閉/失聯，心跳逾時自動停止。
+    last_heartbeat = job.get("last_heartbeat")
+    if last_heartbeat and (now_ts() - last_heartbeat > HEARTBEAT_TIMEOUT):
+        update_job(job_id, cancel_requested=True)
+        raise JobCancelled("網頁已關閉或失聯，已自動停止工作")
 
 
 def get_stock_universe(client: FinMindClient) -> set[str]:
@@ -75,6 +119,7 @@ def get_stock_universe(client: FinMindClient) -> set[str]:
         raise RuntimeError("TaiwanStockInfo 無資料")
 
     df["stock_id"] = df["stock_id"].astype(str)
+
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df = (
@@ -83,27 +128,35 @@ def get_stock_universe(client: FinMindClient) -> set[str]:
               .tail(1)
         )
 
-    # 第一版保守處理：只留 4 位純數字。
+    # 保守：只留 4 位純數字普通股候選
     df = df[df["stock_id"].str.fullmatch(r"\d{4}", na=False)].copy()
 
-    # 若有市場類型，盡量只留上市櫃。
     if "type" in df.columns:
         allowed = {"twse", "tpex"}
         mask = df["type"].astype(str).str.lower().isin(allowed)
         if mask.any():
             df = df[mask]
 
-    # 排除名稱/產業明顯為 ETF 等非普通股標的。
     text_cols = [c for c in ["stock_name", "industry_category"] if c in df.columns]
     if text_cols:
         text = df[text_cols].fillna("").astype(str).agg(" ".join, axis=1)
-        bad = text.str.contains("ETF|ETN|權證|受益證券|存託憑證", case=False, regex=True)
+        bad = text.str.contains(
+            "ETF|ETN|權證|受益證券|存託憑證",
+            case=False,
+            regex=True
+        )
         df = df[~bad]
 
     return set(df["stock_id"].astype(str))
 
 
-def fetch_daily_all(client: FinMindClient, start: str, end: str, out_dir: Path, job_id: str):
+def fetch_daily_for_selected_dates(
+    client: FinMindClient,
+    start: str,
+    end: str,
+    out_dir: Path,
+    job_id: str,
+) -> pd.DataFrame:
     daily_dir = out_dir / "daily"
     daily_dir.mkdir(parents=True, exist_ok=True)
 
@@ -111,10 +164,17 @@ def fetch_daily_all(client: FinMindClient, start: str, end: str, out_dir: Path, 
     pieces = []
 
     for i, d in enumerate(days, 1):
-        day = d.strftime("%Y-%m-%d")
-        update_job(job_id, message=f"抓日線 {day}", progress=5 + pct(i, len(days)) * 0.15)
+        check_cancel(job_id)
 
-        # 明確限制只抓這一天，避免 start_date 單獨使用時抓到之後所有日期。
+        day = d.strftime("%Y-%m-%d")
+        progress = 5 + int(15 * i / max(len(days), 1))
+        update_job(
+            job_id,
+            message=f"抓日線 {day}",
+            progress=progress,
+        )
+
+        # 只抓選定日期，不往前抓歷史資料
         df = client.get(
             "TaiwanStockPrice",
             start_date=day,
@@ -124,7 +184,11 @@ def fetch_daily_all(client: FinMindClient, start: str, end: str, out_dir: Path, 
         if df.empty:
             continue
 
-        df.to_csv(daily_dir / f"{day}.csv", index=False, encoding="utf-8-sig")
+        df.to_csv(
+            daily_dir / f"{day}.csv",
+            index=False,
+            encoding="utf-8-sig"
+        )
         pieces.append(df)
 
     if not pieces:
@@ -133,38 +197,121 @@ def fetch_daily_all(client: FinMindClient, start: str, end: str, out_dir: Path, 
     daily = pd.concat(pieces, ignore_index=True)
     daily["stock_id"] = daily["stock_id"].astype(str)
     daily["date"] = pd.to_datetime(daily["date"]).dt.normalize()
+
     return daily
 
 
-def build_candidates(daily: pd.DataFrame, universe: set[str], start: str, end: str, screen_pct: float):
+def fetch_previous_close_for_stock_day(
+    client: FinMindClient,
+    stock_id: str,
+    day: pd.Timestamp,
+) -> float | None:
+    """
+    為了計算當日漲幅，只需要前一個交易日收盤。
+    不抓 5/20 天歷史分鐘資料。
+    往前最多找 7 個曆日，直到有資料。
+    """
+    for delta in range(1, 8):
+        prev_day = (day - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
+        df = client.get(
+            "TaiwanStockPrice",
+            data_id=stock_id,
+            start_date=prev_day,
+            end_date=prev_day,
+        )
+        if not df.empty and "close" in df.columns:
+            try:
+                return float(df.iloc[-1]["close"])
+            except Exception:
+                pass
+    return None
+
+
+def build_candidates(
+    client: FinMindClient,
+    daily: pd.DataFrame,
+    universe: set[str],
+    screen_pct: float,
+    job_id: str,
+) -> pd.DataFrame:
+    """
+    使用當日最高價 / 前一交易日收盤價做候選篩選。
+    為避免抓所有股票前收，先用日線內可用資料。
+    若資料沒有 reference/昨日收盤欄位，才逐檔補前收。
+    """
     d = daily[daily["stock_id"].isin(universe)].copy()
 
-    for col in ["max", "close"]:
-        if col not in d.columns:
-            raise RuntimeError(f"TaiwanStockPrice 缺少欄位 {col}")
+    if "max" not in d.columns:
+        raise RuntimeError("TaiwanStockPrice 缺少 max 欄位")
 
-    d = d.sort_values(["stock_id", "date"])
-    d["prev_close"] = d.groupby("stock_id")["close"].shift(1)
-    d["day_high_pct"] = (d["max"] / d["prev_close"] - 1) * 100
+    prev_col = None
+    for c in ["reference_price", "yesterday_close", "previous_close"]:
+        if c in d.columns:
+            prev_col = c
+            break
 
-    s = pd.Timestamp(start)
-    e = pd.Timestamp(end)
-    c = d[
-        d["prev_close"].notna()
-        & (d["date"] >= s)
-        & (d["date"] <= e)
-        & (d["day_high_pct"] >= screen_pct)
-    ].copy()
+    rows = []
+    total = len(d)
 
-    keep = [c for c in [
-        "date", "stock_id", "prev_close", "open", "max", "min", "close",
-        "Trading_Volume", "Trading_money", "day_high_pct"
-    ] if c in c.columns]
+    for i, r in enumerate(d.itertuples(index=False), 1):
+        check_cancel(job_id)
 
-    return c[keep].sort_values(["date", "stock_id"])
+        sid = str(getattr(r, "stock_id"))
+        day = pd.Timestamp(getattr(r, "date")).normalize()
+        high = float(getattr(r, "max"))
+
+        if prev_col:
+            prev_close = getattr(r, prev_col, None)
+            try:
+                prev_close = float(prev_close)
+            except Exception:
+                prev_close = None
+        else:
+            prev_close = None
+
+        # 若當日日線本身沒有前收欄位，逐檔補前收。
+        # 只在需要時呼叫 API。
+        if not prev_close or prev_close <= 0:
+            if i % 25 == 0 or i == 1:
+                update_job(
+                    job_id,
+                    progress=20 + int(20 * i / max(total, 1)),
+                    message=f"確認前收 {i}/{total}｜{sid}"
+                )
+            prev_close = fetch_previous_close_for_stock_day(
+                client, sid, day
+            )
+
+        if not prev_close or prev_close <= 0:
+            continue
+
+        day_high_pct = (high / prev_close - 1.0) * 100
+
+        if day_high_pct >= screen_pct:
+            row = {
+                "date": day.strftime("%Y-%m-%d"),
+                "stock_id": sid,
+                "prev_close": prev_close,
+                "day_high_pct": day_high_pct,
+            }
+
+            for col in [
+                "open", "max", "min", "close",
+                "Trading_Volume", "Trading_money"
+            ]:
+                if hasattr(r, col):
+                    row[col] = getattr(r, col)
+
+            rows.append(row)
+
+    return pd.DataFrame(rows)
 
 
-def fetch_kbar(client: FinMindClient, stock_id: str, day: str) -> pd.DataFrame:
+def fetch_kbar(
+    client: FinMindClient,
+    stock_id: str,
+    day: str
+) -> pd.DataFrame:
     return client.get(
         "TaiwanStockKBar",
         data_id=stock_id,
@@ -172,152 +319,143 @@ def fetch_kbar(client: FinMindClient, stock_id: str, day: str) -> pd.DataFrame:
     )
 
 
-def first5(df: pd.DataFrame):
-    if df.empty or "minute" not in df.columns:
-        return None
-    first_minutes = {"09:00:00", "09:01:00", "09:02:00", "09:03:00", "09:04:00"}
+def first5_stats(df: pd.DataFrame, prev_close: float):
+    first_minutes = {
+        "09:00:00", "09:01:00", "09:02:00",
+        "09:03:00", "09:04:00"
+    }
+
     x = df[df["minute"].astype(str).isin(first_minutes)].copy()
+
     if x.empty:
         return None
+
+    high = float(pd.to_numeric(x["high"], errors="coerce").max())
+    volume = float(pd.to_numeric(x["volume"], errors="coerce").sum())
+    high_pct = (high / prev_close - 1.0) * 100
+
     return {
-        "high": float(pd.to_numeric(x["high"], errors="coerce").max()),
-        "volume": float(pd.to_numeric(x["volume"], errors="coerce").sum()),
+        "first5m_high": high,
+        "first5m_high_pct": high_pct,
+        "first5m_volume": volume,
     }
 
 
-def previous_days_for_stock(daily: pd.DataFrame, sid: str, day: pd.Timestamp, n: int):
-    ds = (
-        daily[(daily["stock_id"] == sid) & (daily["date"] < day)]["date"]
-        .drop_duplicates()
-        .sort_values()
-        .tail(n)
-    )
-    return [pd.Timestamp(x) for x in ds]
-
-
 def run_job(job_id: str, cfg: dict):
+    job_dir = DATA_ROOT / job_id
+
     try:
         token = os.environ.get("FINMIND_TOKEN", "").strip()
-        client = FinMindClient(token)
+        client = FinMindClient(token, job_id)
 
         start = cfg["start"]
         end = cfg["end"]
         screen_pct = float(cfg["screen_pct"])
-        warmup_days = int(cfg["warmup_days"])
 
-        job_dir = DATA_ROOT / job_id
         if job_dir.exists():
             shutil.rmtree(job_dir)
         job_dir.mkdir(parents=True)
 
-        update_job(job_id, status="running", progress=1, message="讀取台股標的清單…")
+        update_job(
+            job_id,
+            status="running",
+            progress=1,
+            message="讀取台股標的清單…"
+        )
+
         universe = get_stock_universe(client)
 
-        # 日線往前多抓 45 天，讓第一天也能有 prev_close + RVOL warmup。
-        daily_start = (pd.Timestamp(start) - pd.Timedelta(days=45)).strftime("%Y-%m-%d")
-        daily = fetch_daily_all(client, daily_start, end, job_dir, job_id)
+        check_cancel(job_id)
 
-        update_job(job_id, progress=22, message="建立候選股票清單…")
-        candidates = build_candidates(daily, universe, start, end, screen_pct)
-        candidates.to_csv(job_dir / "candidates.csv", index=False, encoding="utf-8-sig")
+        daily = fetch_daily_for_selected_dates(
+            client, start, end, job_dir, job_id
+        )
+
+        update_job(
+            job_id,
+            progress=20,
+            message="建立強勢股候選清單…"
+        )
+
+        candidates = build_candidates(
+            client=client,
+            daily=daily,
+            universe=universe,
+            screen_pct=screen_pct,
+            job_id=job_id,
+        )
 
         if candidates.empty:
-            raise RuntimeError("沒有符合篩選條件的 stock-day")
+            raise RuntimeError("沒有符合預篩條件的 stock-day")
 
-        # 所有 KBar 任務：候選日 + 該股票之前 warmup_days 天。
-        tasks = set()
-        for r in candidates.itertuples(index=False):
-            sid = str(r.stock_id)
-            day = pd.Timestamp(r.date).normalize()
-            tasks.add((sid, day.strftime("%Y-%m-%d"), True))
-            for hd in previous_days_for_stock(daily, sid, day, warmup_days):
-                tasks.add((sid, hd.strftime("%Y-%m-%d"), False))
-
-        # 同一 sid/day 若同時候選與 warmup，只保留 candidate=True
-        merged = {}
-        for sid, day, is_candidate in tasks:
-            merged[(sid, day)] = merged.get((sid, day), False) or is_candidate
-        tasks2 = [(sid, day, cand) for (sid, day), cand in merged.items()]
-        tasks2.sort(key=lambda x: (x[1], x[0]))
+        candidates.to_csv(
+            job_dir / "candidates.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
 
         kbar_dir = job_dir / "kbar"
         kbar_dir.mkdir(exist_ok=True)
 
-        first5_cache = {}
-        total = len(tasks2)
+        research_rows = []
+        total = len(candidates)
 
-        for i, (sid, day, is_candidate) in enumerate(tasks2, 1):
+        for i, r in enumerate(candidates.itertuples(index=False), 1):
+            check_cancel(job_id)
+
+            sid = str(r.stock_id)
+            day = str(r.date)
+
             update_job(
                 job_id,
-                progress=25 + int(55 * i / max(total, 1)),
-                message=f"抓 1分K {i}/{total}｜{sid} {day}"
+                progress=42 + int(50 * i / max(total, 1)),
+                message=f"抓當日 1分K {i}/{total}｜{sid} {day}"
             )
 
             df = fetch_kbar(client, sid, day)
+
             if df.empty:
                 continue
 
-            first5_cache[(sid, day)] = first5(df)
+            p = kbar_dir / day
+            p.mkdir(exist_ok=True)
+            df.to_csv(
+                p / f"{sid}.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
 
-            if is_candidate:
-                p = kbar_dir / day
-                p.mkdir(exist_ok=True)
-                df.to_csv(p / f"{sid}.csv", index=False, encoding="utf-8-sig")
+            stats = first5_stats(df, float(r.prev_close))
+            if stats:
+                research_rows.append({
+                    "date": day,
+                    "stock_id": sid,
+                    "prev_close": float(r.prev_close),
+                    "day_high_pct": float(r.day_high_pct),
+                    **stats,
+                    "early_3pct": stats["first5m_high_pct"] >= 3.0,
+                    "early_3_5pct": stats["first5m_high_pct"] >= 3.5,
+                    "early_4pct": stats["first5m_high_pct"] >= 4.0,
+                    "early_4_5pct": stats["first5m_high_pct"] >= 4.5,
+                    "early_5pct": stats["first5m_high_pct"] >= 5.0,
+                })
 
-        # 建立 research_base
-        update_job(job_id, progress=82, message="計算開盤5分鐘漲幅與 RVOL5…")
-        rows = []
-
-        for r in candidates.itertuples(index=False):
-            sid = str(r.stock_id)
-            day = pd.Timestamp(r.date).normalize()
-            day_s = day.strftime("%Y-%m-%d")
-            cur = first5_cache.get((sid, day_s))
-            if not cur:
-                continue
-
-            prev_close = float(r.prev_close)
-            f5_high_pct = (cur["high"] / prev_close - 1) * 100
-
-            hist = []
-            for hd in previous_days_for_stock(daily, sid, day, warmup_days):
-                h = first5_cache.get((sid, hd.strftime("%Y-%m-%d")))
-                if h and h["volume"] > 0:
-                    hist.append(h["volume"])
-
-            hist_mean = float(pd.Series(hist).mean()) if hist else None
-            rvol5 = cur["volume"] / hist_mean if hist_mean and hist_mean > 0 else None
-
-            rows.append({
-                "date": day_s,
-                "stock_id": sid,
-                "prev_close": prev_close,
-                "day_high_pct": float(r.day_high_pct),
-                "first5m_high_pct": f5_high_pct,
-                "first5m_volume": cur["volume"],
-                "rvol5_hist_n": len(hist),
-                "rvol5_hist_mean": hist_mean,
-                "rvol5": rvol5,
-                "early_3pct": f5_high_pct >= 3.0,
-                "early_3_5pct": f5_high_pct >= 3.5,
-                "early_4pct": f5_high_pct >= 4.0,
-                "early_4_5pct": f5_high_pct >= 4.5,
-                "early_5pct": f5_high_pct >= 5.0,
-            })
-
-        research = pd.DataFrame(rows)
-        research.to_csv(job_dir / "research_base.csv", index=False, encoding="utf-8-sig")
+        research = pd.DataFrame(research_rows)
+        research.to_csv(
+            job_dir / "research_base.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
 
         meta = {
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "start": start,
             "end": end,
             "screen_pct": screen_pct,
-            "warmup_days": warmup_days,
             "candidate_events": len(candidates),
             "research_rows": len(research),
-            "kbar_tasks": total,
         }
+
         (job_dir / "metadata.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2),
             encoding="utf-8"
@@ -326,7 +464,12 @@ def run_job(job_id: str, cfg: dict):
         zip_path = DATA_ROOT / f"{job_id}.zip"
         if zip_path.exists():
             zip_path.unlink()
-        shutil.make_archive(str(zip_path.with_suffix("")), "zip", job_dir)
+
+        shutil.make_archive(
+            str(zip_path.with_suffix("")),
+            "zip",
+            job_dir
+        )
 
         update_job(
             job_id,
@@ -335,6 +478,20 @@ def run_job(job_id: str, cfg: dict):
             message="完成，可以下載 ZIP",
             download=f"/download/{job_id}",
             meta=meta,
+        )
+
+    except JobCancelled as e:
+        try:
+            if job_dir.exists():
+                shutil.rmtree(job_dir)
+        except Exception:
+            pass
+
+        update_job(
+            job_id,
+            status="cancelled",
+            progress=0,
+            message=str(e),
         )
 
     except Exception as e:
@@ -353,27 +510,40 @@ def index():
 
 @app.post("/start")
 def start_job():
+    # 防止同時開多個工作，避免浪費 API / RAM
+    active = any_active_job()
+    if active:
+        return jsonify({
+            "error": "目前已有工作正在執行，請先停止或等待完成。",
+            "active_job_id": active,
+        }), 409
+
     payload = request.get_json(force=True)
-    start = payload.get("start", "2026-05-01")
-    end = payload.get("end", "2026-08-14")
+
+    start = payload.get("start")
+    end = payload.get("end")
     screen_pct = float(payload.get("screen_pct", 3.0))
-    warmup_days = int(payload.get("warmup_days", 20))
+
+    if not start or not end:
+        return jsonify({"error": "請選擇開始與結束日期"}), 400
 
     if pd.Timestamp(end) < pd.Timestamp(start):
         return jsonify({"error": "結束日期不能早於開始日期"}), 400
 
     job_id = uuid.uuid4().hex[:12]
+
     update_job(
         job_id,
         status="queued",
         progress=0,
         message="排隊中…",
+        cancel_requested=False,
+        last_heartbeat=now_ts(),
         cfg={
             "start": start,
             "end": end,
             "screen_pct": screen_pct,
-            "warmup_days": warmup_days,
-        }
+        },
     )
 
     t = threading.Thread(
@@ -382,13 +552,40 @@ def start_job():
             "start": start,
             "end": end,
             "screen_pct": screen_pct,
-            "warmup_days": warmup_days,
         }),
         daemon=True,
     )
     t.start()
 
     return jsonify({"job_id": job_id})
+
+
+@app.post("/heartbeat/<job_id>")
+def heartbeat(job_id):
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "找不到工作"}), 404
+
+    if job.get("status") in {"queued", "running"}:
+        update_job(job_id, last_heartbeat=now_ts())
+
+    return jsonify({"ok": True})
+
+
+@app.post("/cancel/<job_id>")
+def cancel(job_id):
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "找不到工作"}), 404
+
+    if job.get("status") in {"queued", "running"}:
+        update_job(
+            job_id,
+            cancel_requested=True,
+            message="正在停止…"
+        )
+
+    return jsonify({"ok": True})
 
 
 @app.get("/status/<job_id>")
@@ -402,12 +599,14 @@ def status(job_id):
 @app.get("/download/<job_id>")
 def download(job_id):
     zip_path = DATA_ROOT / f"{job_id}.zip"
+
     if not zip_path.exists():
-        return "檔案尚未完成或已被 Render 重啟清除", 404
+        return "檔案尚未完成或已被清除", 404
+
     return send_file(
         zip_path,
         as_attachment=True,
-        download_name=f"finmind_research_{job_id}.zip",
+        download_name=f"finmind_keyprice_{job_id}.zip",
     )
 
 
