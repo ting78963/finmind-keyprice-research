@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FinMind Key Price Research</title>
+  <style>
+    :root{
+      --bg:#f4f6f8; --card:#fff; --text:#17202a; --muted:#6b7280;
+      --green:#18794e; --line:#e5e7eb; --blue:#2563eb; --danger:#b91c1c;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:var(--bg); color:var(--text);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;
+    }
+    .wrap{max-width:760px;margin:0 auto;padding:28px 16px 60px}
+    .hero{margin-bottom:18px}
+    h1{font-size:28px;margin:0 0 6px}
+    .sub{color:var(--muted);line-height:1.6}
+    .card{
+      background:var(--card);border:1px solid var(--line);border-radius:18px;
+      padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.04);
+    }
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    label{display:block;font-size:13px;font-weight:700;margin-bottom:6px}
+    input{
+      width:100%;font-size:16px;padding:12px;border-radius:10px;
+      border:1px solid #d1d5db;background:#fff;
+    }
+    .full{grid-column:1/-1}
+    button,.download{
+      display:inline-block;width:100%;border:0;border-radius:12px;
+      padding:14px 16px;font-size:16px;font-weight:800;cursor:pointer;
+      text-align:center;text-decoration:none;
+    }
+    button{background:var(--blue);color:white}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .download{background:var(--green);color:white;margin-top:12px}
+    .note{
+      margin-top:14px;padding:12px;border-radius:12px;background:#f8fafc;
+      color:#475569;font-size:14px;line-height:1.6
+    }
+    .status{margin-top:18px;display:none}
+    .bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden}
+    .fill{height:100%;width:0;background:var(--green);transition:width .3s}
+    .statusline{display:flex;justify-content:space-between;gap:10px;margin:9px 0}
+    .msg{font-size:14px;color:#475569;word-break:break-word}
+    .pct{font-weight:800}
+    .error{color:var(--danger)}
+    .foot{margin-top:20px;color:#94a3b8;font-size:12px;line-height:1.5}
+    @media(max-width:560px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <h1>FinMind Key Price Research</h1>
+    <div class="sub">
+      先用日線挑出曾達門檻的股票，再抓必要的 1 分 K 與歷史開盤量，
+      產生後續 Key Price / Test 3–4 / 量能竭盡研究資料。
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <label>開始日期</label>
+        <input id="start" type="date" value="2026-05-01">
+      </div>
+      <div>
+        <label>結束日期</label>
+        <input id="end" type="date" value="2026-08-14">
+      </div>
+      <div>
+        <label>日內最高漲幅預篩 (%)</label>
+        <input id="screen" type="number" min="0" max="10" step="0.5" value="3">
+      </div>
+      <div>
+        <label>RVOL 歷史交易日</label>
+        <input id="warmup" type="number" min="5" max="60" step="1" value="20">
+      </div>
+
+      <div class="full">
+        <button id="startBtn" onclick="startJob()">開始抓資料</button>
+      </div>
+    </div>
+
+    <div class="note">
+      建議第一輪保持 <b>3%</b> 預篩、<b>20 日</b> RVOL。
+      3% 只是下載階段保留樣本，後續再比較 3 / 3.5 / 4 / 4.5 / 5%。
+      FinMind Token 存在 Render 環境變數，不會送到瀏覽器。
+    </div>
+
+    <div id="status" class="status">
+      <div class="statusline">
+        <div id="msg" class="msg">準備中…</div>
+        <div id="pct" class="pct">0%</div>
+      </div>
+      <div class="bar"><div id="fill" class="fill"></div></div>
+      <div id="result"></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    Render 免費/一般 Web Service 的檔案系統可能在重新部署或重啟後清除。
+    因此工作完成後請直接下載 ZIP。大量日期範圍可能需要較長時間。
+  </div>
+</div>
+
+<script>
+let timer = null;
+
+async function startJob(){
+  const btn = document.getElementById("startBtn");
+  const status = document.getElementById("status");
+  const result = document.getElementById("result");
+
+  btn.disabled = true;
+  result.innerHTML = "";
+  status.style.display = "block";
+
+  const payload = {
+    start: document.getElementById("start").value,
+    end: document.getElementById("end").value,
+    screen_pct: Number(document.getElementById("screen").value),
+    warmup_days: Number(document.getElementById("warmup").value),
+  };
+
+  try{
+    const r = await fetch("/start", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error || "無法建立工作");
+    poll(data.job_id);
+  }catch(e){
+    setError(e.message);
+    btn.disabled = false;
+  }
+}
+
+async function poll(jobId){
+  clearTimeout(timer);
+  try{
+    const r = await fetch(`/status/${jobId}`);
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error || "狀態查詢失敗");
+
+    const p = Math.round(Number(data.progress || 0));
+    document.getElementById("pct").textContent = `${p}%`;
+    document.getElementById("fill").style.width = `${p}%`;
+    document.getElementById("msg").textContent = data.message || "";
+
+    if(data.status === "done"){
+      document.getElementById("result").innerHTML =
+        `<a class="download" href="${data.download}">下載研究資料 ZIP</a>`;
+      document.getElementById("startBtn").disabled = false;
+      return;
+    }
+
+    if(data.status === "error"){
+      setError(data.message || "發生錯誤");
+      document.getElementById("startBtn").disabled = false;
+      return;
+    }
+
+    timer = setTimeout(()=>poll(jobId), 1800);
+  }catch(e){
+    setError(e.message);
+    document.getElementById("startBtn").disabled = false;
+  }
+}
+
+function setError(text){
+  document.getElementById("msg").innerHTML =
+    `<span class="error">${String(text)}</span>`;
+}
+</script>
+</body>
+</html>
