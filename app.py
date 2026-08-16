@@ -6,7 +6,7 @@ import shutil
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -114,8 +114,13 @@ def fetch_daily_all(client: FinMindClient, start: str, end: str, out_dir: Path, 
         day = d.strftime("%Y-%m-%d")
         update_job(job_id, message=f"抓日線 {day}", progress=5 + pct(i, len(days)) * 0.15)
 
-        # 不帶 data_id，抓該日全市場。
-        df = client.get("TaiwanStockPrice", start_date=day)
+        # 明確限制只抓這一天，避免 start_date 單獨使用時抓到之後所有日期。
+        df = client.get(
+            "TaiwanStockPrice",
+            start_date=day,
+            end_date=day,
+        )
+
         if df.empty:
             continue
 
@@ -170,7 +175,7 @@ def fetch_kbar(client: FinMindClient, stock_id: str, day: str) -> pd.DataFrame:
 def first5(df: pd.DataFrame):
     if df.empty or "minute" not in df.columns:
         return None
-    first_minutes = {"09:00:00","09:01:00","09:02:00","09:03:00","09:04:00"}
+    first_minutes = {"09:00:00", "09:01:00", "09:02:00", "09:03:00", "09:04:00"}
     x = df[df["minute"].astype(str).isin(first_minutes)].copy()
     if x.empty:
         return None
